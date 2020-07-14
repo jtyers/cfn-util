@@ -1,0 +1,72 @@
+#!/bin/bash
+
+usage="awscfn-watch-stack <stack name>"
+
+warn() {
+  echo "$@" >&2
+}
+
+die() {
+  warn "$@"
+  exit 1
+}
+
+set -eu
+
+[ $# -eq 1 ] || die "usage: $usage"
+
+stackName="$1"
+
+aws cloudformation describe-stack-resources --stack-name "$stackName" \
+  | jq -r .'StackResources 
+    | map([ .ResourceType, .LogicalResourceId, .ResourceStatus ])
+    | .[]
+    | @tsv' \
+  | column -t
+
+set +e
+aws cloudformation describe-stack-events --stack-name "$stackName" \
+  | jq -r '
+  (
+    .StackEvents
+    | map(
+      select(
+        .LogicalResourceId == "'"${stackName}"'" and
+        .ResourceType == "AWS::CloudFormation::Stack" and
+        ( .ResourceStatus == "UPDATE_IN_PROGRESS" or .ResourceStatus == "CREATE_IN_PROGRESS")
+      )
+    )[0]
+    | if . == null then
+        error("failed to find timestamp for UPDATE_IN_PROGRESS or CREATE_IN_PROGRESS event")
+      else
+        .Timestamp
+      end
+
+      # strip trailing milliseconds, since jq does not support parsing this
+    | gsub("\\.\\d{3}Z$"; "Z")
+
+  ) as $fromTimestamp
+  | 
+    .StackEvents
+    | map(
+    select((.Timestamp| gsub("\\.\\d{3}Z$"; "Z")|fromdate) >= ($fromTimestamp|fromdate))
+      | [
+        .LogicalResourceId,
+        .ResourceStatus,
+        if .ResourceStatusReason then .ResourceStatusReason
+        | gsub(" "; "_") else null end
+      ]
+    )
+    | .[]
+    | @tsv' \
+  | column -t \
+  | grep FAIL
+
+ret=$?
+
+# flip exit codes; if grep finds 'FAIL', it'll exit 0 but we want exit 1
+if [ $ret -eq 0 ]; then
+  exit 1
+else
+  exit 0
+fi

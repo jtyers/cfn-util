@@ -1,0 +1,62 @@
+#!/bin/bash
+
+usage="awscfn-update-stack <stack name> <template file> [<args>]"
+
+warn() {
+  echo "$@" >&2
+}
+
+die() {
+  warn "$@"
+  exit 1
+}
+
+set -eu
+
+[ $# -ge 2 ] || die "usage: $usage"
+
+stackName="$1"
+shift
+
+templateFile="$1"
+shift
+
+params=""
+
+declare -a args
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -P)
+      # we process -P <...> as a special abbreviated parameters option: foo=bar;baz=bat becomes
+      #   [{"ParameterKey":"foo","ParameterValue":"bar"},{"ParameterKey":"baz","ParameterValue":"bat"}]
+      # i.e. must less verbose args on the cmd line for simple parameters
+      shift
+      if [ -z "$params" ]; then
+        params="$1"
+      else
+        params="${params};${1}"
+      fi
+      shift
+      ;;
+
+    *)
+      args+=("$1")
+      shift
+      ;;
+
+  esac
+done
+
+if [ -n "$params" ]; then
+  args+=("--parameters")
+  args+=($(jq -cR 'split(";") | map(
+    split("=") | { ParameterKey: .[0], ParameterValue: .[1] } )' <<<"$params"))
+fi
+
+warn "updating stack"
+aws cloudformation update-stack --stack-name "$stackName" \
+      --template-body="$(< $templateFile)" \
+      "${args[@]}" # pass thru any other args (parameters, capabilities, and so on)
+
+warn "waiting for stack update to complete..."
+aws cloudformation wait stack-update-complete --stack-name "$stackName"
