@@ -19,7 +19,10 @@ stackName="$1"
 
 aws cloudformation describe-stack-resources --stack-name "$stackName" \
   | jq -r .'StackResources 
-    | map([ .ResourceType, .LogicalResourceId, .ResourceStatus ])
+    | map(
+        select( .ResourceStatus | endswith("_COMPLETE") | not )
+        | [ .ResourceType, .LogicalResourceId, .ResourceStatus ]
+      )
     | .[]
     | @tsv' \
   | column -t

@@ -1,0 +1,43 @@
+#!/bin/sh
+
+# For every folder in the given source directory, creates a ZIP archive of that folder
+# and uploads to the given S3 bucket, under 'cloudformation-custom-resources/<name>'
+#
+# This is intended to be the bucket specified to the Cloudformation templates as the
+# bucket containing cloudformation custom resources.
+#
+# NOTE: requires `7z` and `aws` (aws-cli) to be installed
+#
+# usage: upload-to-s3 <source directory> <bucket name>
+
+set -eu
+
+# The name of the entrypoint file we look for (i.e. all lambdas you want
+# to upload should have this file in their source directory)
+funcFileName="lambda_function.py"
+
+die() {
+  echo "$@" >&2
+  exit 1
+}
+
+[ $# -eq 2 ] || die "usage: $(basename $0) <source dir> <bucket name>"
+
+sourceDir=$(readlink -f "$1") # make absolute
+bucket="$2"
+
+for lf in $(find $sourceDir -type f -name "$funcFileName"); do
+  d=$(dirname "$lf")
+
+  archivePath="$sourceDir/$(basename $d).zip"
+
+  prevCd=$PWD
+  cd $d
+
+  echo "creating archive: $(basename $d).zip"
+  7z -bd a $archivePath . > /dev/null
+
+  cd $prevCd
+
+  aws s3 cp $archivePath s3://$bucket/cloudformation-custom-resources/
+done
